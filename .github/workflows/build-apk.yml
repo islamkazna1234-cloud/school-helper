@@ -24,6 +24,9 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Setup Android SDK and accept licenses
+        uses: android-actions/setup-android@v3
+
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
 
@@ -43,7 +46,10 @@ jobs:
       - name: Init TWA project from GitHub Pages manifest
         run: |
           cd twa-build
-          yes "" | bubblewrap init --manifest="https://islamkazna1234-cloud.github.io/school-helper/manifest.json"
+          yes | bubblewrap init \
+            --manifest="https://islamkazna1234-cloud.github.io/school-helper/manifest.json" \
+            --jdkPath="$JAVA_HOME" \
+            --androidSdkPath="$ANDROID_HOME"
 
       - name: Configure twa-manifest.json with keystore
         run: |
