@@ -9,6 +9,9 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,8 +27,10 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Setup Android SDK and accept licenses
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses || true
 
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
