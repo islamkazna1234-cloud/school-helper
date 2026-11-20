@@ -1,0 +1,71 @@
+name: Build Birge APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Install Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli
+
+      - name: Create signing keystore
+        run: |
+          mkdir -p twa-build
+          keytool -genkeypair -v \
+            -keystore twa-build/birge-release.keystore \
+            -alias birge \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass birge123456 \
+            -keypass birge123456 \
+            -dname "CN=Birge, OU=School, O=Birge, L=Astana, S=Astana, C=KZ"
+
+      - name: Init TWA project from GitHub Pages manifest
+        run: |
+          cd twa-build
+          yes "" | bubblewrap init --manifest="https://islamkazna1234-cloud.github.io/school-helper/manifest.json"
+
+      - name: Configure twa-manifest.json with keystore
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "twa-build/twa-manifest.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.signingKey = {
+              path: "./birge-release.keystore",
+              alias: "birge"
+            };
+            cfg.enableNotifications = false;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+          '
+
+      - name: Build Android APK
+        run: |
+          cd twa-build
+          printf "birge123456\nbirge123456\n" | bubblewrap build
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Birge-Android-APK
+          path: twa-build/app-release-signed.apk
