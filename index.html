@@ -106,6 +106,7 @@ nav .in{display:flex;width:100%;max-width:560px}
 .chips::-webkit-scrollbar{display:none}
 .chip{flex:none;min-height:36px;padding:6px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
 .chip.on{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}
+.pick-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
 .rules{margin:0;padding-left:20px}.rules li{margin-bottom:8px}
 .check{display:flex;gap:10px;align-items:flex-start;font-weight:600;margin:16px 0;cursor:pointer}
 .check input{width:22px;height:22px;flex:none;margin:0}
@@ -166,6 +167,11 @@ nav .in{display:flex;width:100%;max-width:560px}
         <label for="l-code">Код школы</label>
         <input id="l-code" maxlength="30" autocomplete="off" autocapitalize="characters" placeholder="Спросите у учителя информатики">
       </div>
+      <div class="field">
+        <label>В каких предметах можете помогать? <span class="hint" style="font-weight:400">(необязательно)</span></label>
+        <div class="pick-grid" id="login-subjects" role="group" aria-label="Optional helper subjects"></div>
+        <div class="hint">Выбор поможет быстрее находить подходящие запросы. Можно изменить позже в профиле.</div>
+      </div>
       <p class="note" id="setup-msg" hidden></p>
       <button class="btn" type="submit">Войти</button>
     </form>
@@ -223,6 +229,12 @@ nav .in{display:flex;width:100%;max-width:560px}
       <div class="stat"><b id="s-asked">0</b><small>Вопросов</small></div>
       <div class="stat"><b id="s-helped">0</b><small>Помогал(а)</small></div>
       <div class="stat"><b id="s-points">0</b><small>Баллы ⭐</small></div>
+    </div>
+    <div class="card">
+      <h3>📚 Мои предметы для помощи</h3>
+      <p class="hint" style="margin-bottom:10px">Необязательно. Выбранные предметы поднимаются выше в ленте и доступны по быстрому фильтру.</p>
+      <div class="pick-grid" id="profile-subjects" role="group" aria-label="My helper subjects"></div>
+      <button class="btn ghost" id="save-subjects-btn" type="button">Сохранить предметы</button>
     </div>
     <div class="card">
       <h3>⭐ Мой рейтинг</h3>
@@ -315,8 +327,10 @@ const SUPABASE_URL = "https://wefqmswlxazmqfzaouat.supabase.co";
 const SUPABASE_KEY = "sb_publishable_KcDTzUvK4vr3aE1YRoUnfQ_APgSM5y0";
 /* ================================================================================ */
 const RULES_KEY = "schoolhelp.rules.v1", POST_KEY = "schoolhelp.lastpost.v1";
+const SUBJECTS_KEY_PREFIX = "schoolhelp.subjects.v1.";
 const COOLDOWN_S = 60, MAX_ACTIVE = 3, RETURN_H = 24, POINTS = 10;
 const SUBJECTS = ["Математика","Физика","Информатика","Химия","Биология","История","География","Русский язык","Казахский язык","Английский язык","Другое"];
+const HELPER_SUBJECTS = SUBJECTS.filter(s => s !== "Другое");
 const STATUS_LABEL = {open:"🟢 Ищет помощь", in_progress:"🟡 В процессе", resolved:"✅ Решено", under_review:"🚩 На проверке"};
 
 /* ---------- Безопасность и помощники ---------- */
@@ -349,10 +363,34 @@ let currentUser = null, requests = [], view = "feed";
 let filterSubject = "", editingId = null, resolvingId = null, lastSweep = 0;
 let myPoints = 0, board = [], stats = null;
 let reviews = new Map(), ratings = new Map(), myReviews = null, modReviews = [];
+let loginSubjects = [], profileSubjects = [];
 const TAGS_GOOD = ["Объяснил понятно","Помог разобраться","Быстро ответил","Был вежлив","Терпеливо объяснял"];
 const TAGS_LOW = ["Объяснение было непонятным","Долго отвечал","Не помог по теме"];
 let rv = {rating:0, tags:[], image:null, busy:false};
 const stars = n => "★".repeat(n) + "☆".repeat(5 - n);
+
+function sanitizeSubjects(list){
+  if(!Array.isArray(list)) return [];
+  const allowed = new Set(HELPER_SUBJECTS);
+  return [...new Set(list.map(x => String(x)).filter(s => allowed.has(s)))];
+}
+function loadSavedSubjects(userId){
+  if(!userId) return [];
+  try{
+    const raw = lsGet(SUBJECTS_KEY_PREFIX + userId);
+    return sanitizeSubjects(raw ? JSON.parse(raw) : []);
+  }catch(e){ return []; }
+}
+function saveLocalSubjects(userId, list){
+  if(!userId) return;
+  lsSet(SUBJECTS_KEY_PREFIX + userId, JSON.stringify(sanitizeSubjects(list)));
+}
+async function syncProfileSubjectsToDb(userId, list){
+  if(!db || !userId) return;
+  try{
+    await db.from("profiles").update({helper_subjects: sanitizeSubjects(list)}).eq("id", userId);
+  }catch(e){}
+}
 
 function toast(msg){
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
@@ -367,7 +405,16 @@ function ago(ts){
 }
 const find = id => requests.find(r => r.id === Number(id));
 function setUser(p){
-  currentUser = {id:p.id, name:p.name, grade:p.grade, nickname:p.name+", "+p.grade, isMod:!!p.is_moderator};
+  const dbSubjects = sanitizeSubjects(p.helper_subjects);
+  const localSubjects = loadSavedSubjects(p.id);
+  const merged = dbSubjects.length ? dbSubjects : localSubjects;
+  if(dbSubjects.length) saveLocalSubjects(p.id, dbSubjects);
+  currentUser = {
+    id:p.id, name:p.name, grade:p.grade, nickname:p.name+", "+p.grade,
+    isMod:!!p.is_moderator, subjects:merged
+  };
+  profileSubjects = [...merged];
+  if(filterSubject === "__MINE__" && !currentUser.subjects.length) filterSubject = "";
 }
 const activeCount = () => requests.filter(r => r.authorId === currentUser.id && (r.status === "open" || r.status === "in_progress")).length;
 const cooldownLeft = () => Math.max(0, COOLDOWN_S - Math.floor((Date.now() - Number(lsGet(POST_KEY) || 0)) / 1000));
@@ -384,7 +431,7 @@ function fromRow(r, contacts, mine){
 async function refresh(){
   if(!db || !currentUser) return;
   try{
-    if(Date.now() - lastSweep > 300000){      // автовозврат запросов старше 24 часов (при запуске и раз в 5 минут)
+    if(Date.now() - lastSweep > 300000){
       lastSweep = Date.now();
       await db.rpc("sweep_stale");
     }
@@ -441,6 +488,43 @@ async function loadStats(){
   }catch(e){ toast(friendly(e)); }
 }
 
+/* ---------- Предметы помощника ---------- */
+function renderSubjectPicker(containerId, selectedList, actionName){
+  const box = $(containerId);
+  if(!box) return;
+  const active = new Set(sanitizeSubjects(selectedList));
+  box.innerHTML = HELPER_SUBJECTS.map(s =>
+    `<button type="button" class="chip ${active.has(s) ? "on" : ""}" data-action="${esc(actionName)}" data-subject="${esc(s)}" aria-pressed="${active.has(s)}">${esc(s)}</button>`
+  ).join("");
+}
+function toggleLoginSubject(subj){
+  const clean = sanitizeSubjects(subj ? [subj] : []);
+  if(!clean.length) return;
+  loginSubjects = loginSubjects.includes(clean[0])
+    ? loginSubjects.filter(x => x !== clean[0])
+    : [...loginSubjects, clean[0]];
+  renderSubjectPicker("login-subjects", loginSubjects, "lsubj");
+}
+function toggleProfileSubject(subj){
+  const clean = sanitizeSubjects(subj ? [subj] : []);
+  if(!clean.length) return;
+  profileSubjects = profileSubjects.includes(clean[0])
+    ? profileSubjects.filter(x => x !== clean[0])
+    : [...profileSubjects, clean[0]];
+  renderSubjectPicker("profile-subjects", profileSubjects, "psubj");
+}
+async function saveProfileSubjects(){
+  if(!currentUser) return;
+  const clean = sanitizeSubjects(profileSubjects);
+  currentUser.subjects = clean;
+  profileSubjects = [...clean];
+  saveLocalSubjects(currentUser.id, clean);
+  if(filterSubject === "__MINE__" && !clean.length) filterSubject = "";
+  await syncProfileSubjectsToDb(currentUser.id, clean);
+  renderProfile();
+  toast(clean.length ? "Предметы для помощи сохранены" : "Список предметов очищен");
+}
+
 /* ---------- Правила, вход ---------- */
 function acceptRules(){ lsSet(RULES_KEY, "1"); rulesOk = true; render(); }
 async function handleLogin(e){
@@ -458,13 +542,21 @@ async function handleLogin(e){
     }
     const {data, error} = await db.rpc("join_school", {p_name:name, p_grade:$("l-grade").value, p_code:$("l-code").value.trim()});
     if(error){ toast(friendly(error)); return; }
-    setUser(data); view = "feed";
+    const chosen = sanitizeSubjects(loginSubjects);
+    if(chosen.length){
+      saveLocalSubjects(data.id, chosen);
+      data.helper_subjects = chosen;
+      await syncProfileSubjectsToDb(data.id, chosen);
+    }
+    setUser(data);
+    loginSubjects = [];
+    view = "feed";
     await refresh(); render();
     toast("Добро пожаловать, "+name+"!");
   }catch(err){ toast(friendly(err)); }
   finally{ btn.disabled = false; }
 }
-function logout(){ currentUser = null; requests = []; render(); }
+function logout(){ currentUser = null; requests = []; profileSubjects = []; render(); }
 
 /* ---------- Создание и редактирование ---------- */
 async function handleCreate(e){
@@ -550,7 +642,6 @@ function pickTag(tag){
   else toast("Можно выбрать не больше 3");
   renderReviewForm();
 }
-// Фото: проверка типа, уменьшение и пересохранение как JPEG (так же удаляются скрытые данные, например геолокация)
 function compressImage(file){
   return new Promise((resolve, reject) => {
     if(!file.type.startsWith("image/") || file.type === "image/svg+xml") return reject(new Error("Подходит только фото (JPG, PNG, WebP)"));
@@ -588,7 +679,7 @@ async function confirmReview(){
   rv.busy = true; renderReviewForm();
   const pts = await call("resolve_request", {p_id:id, p_rating:rv.rating, p_tags:rv.tags, p_text:$("rv-text").value.trim(), p_image:rv.image});
   rv.busy = false;
-  if(pts === null){ renderReviewForm(); return; }   // окно остаётся открытым, сообщение об ошибке уже показано
+  if(pts === null){ renderReviewForm(); return; }
   closeReview();
   toast(Number(pts) > 0 ? "Запрос закрыт. Помощник получил +"+pts+" баллов!" : "Спасибо за отзыв! Запрос закрыт.");
 }
@@ -688,15 +779,30 @@ function renderModReviews(){
 const emptyHtml = text => `<div class="empty">${esc(text)}</div>`;
 
 function renderChips(){
-  $("chips").innerHTML = ["", ...SUBJECTS].map(s =>
+  const mySubjs = (currentUser && currentUser.subjects) || [];
+  const mineChip = mySubjs.length
+    ? `<button class="chip ${filterSubject === "__MINE__" ? "on" : ""}" data-action="chip" data-subject="__MINE__" aria-pressed="${filterSubject === "__MINE__"}">⭐ Мои предметы</button>`
+    : "";
+  const restChips = ["", ...SUBJECTS].map(s =>
     `<button class="chip ${filterSubject === s ? "on" : ""}" data-action="chip" data-subject="${esc(s)}" aria-pressed="${filterSubject === s}">${s ? esc(s) : "Все"}</button>`).join("");
+  $("chips").innerHTML = mineChip + restChips;
 }
 function renderFeed(){
   const q = $("f-search").value.trim().toLowerCase();
+  const mySet = new Set((currentUser && currentUser.subjects) || []);
+  const isMySubject = r => mySet.has(r.subject);
   const list = requests
-    .filter(r => (r.status === "open" || r.status === "in_progress") && (!filterSubject || r.subject === filterSubject)
-      && (!q || (r.topic + " " + r.desc + " " + r.subject).toLowerCase().includes(q)))
-    .sort((a,b) => (a.urgency === "urgent" ? 0 : 1) - (b.urgency === "urgent" ? 0 : 1) || b.createdAt - a.createdAt);
+    .filter(r => {
+      if(r.status !== "open" && r.status !== "in_progress") return false;
+      if(filterSubject === "__MINE__" && !isMySubject(r)) return false;
+      if(filterSubject && filterSubject !== "__MINE__" && r.subject !== filterSubject) return false;
+      return !q || (r.topic + " " + r.desc + " " + r.subject).toLowerCase().includes(q);
+    })
+    .sort((a,b) =>
+      (a.urgency === "urgent" ? 0 : 1) - (b.urgency === "urgent" ? 0 : 1)
+      || (isMySubject(a) ? 0 : 1) - (isMySubject(b) ? 0 : 1)
+      || b.createdAt - a.createdAt
+    );
   $("feed").innerHTML = list.length ? list.map(cardHtml).join("")
     : emptyHtml(q || filterSubject ? "Ничего не найдено. Измените поиск или фильтр." : "Пока нет открытых запросов. Загляните позже или создайте свой.");
 }
@@ -706,6 +812,7 @@ function renderProfile(){
   $("s-asked").textContent = requests.filter(r => r.authorId === currentUser.id).length;
   $("s-helped").textContent = requests.filter(r => r.helperId === currentUser.id).length;
   $("s-points").textContent = myPoints;
+  renderSubjectPicker("profile-subjects", profileSubjects, "psubj");
   $("board").innerHTML = board.length
     ? board.map((x,i) => `<li><span>${i+1}. ${esc(x.name)}, ${esc(x.grade)}</span><b>${esc(x.points)} ⭐</b></li>`).join("")
     : "<li>На этой неделе пока никто не помог. Станьте первым!</li>";
@@ -750,7 +857,10 @@ function render(){
     if(t.dataset.tab === (active === "mod" || active === "stats" ? "profile" : active)) t.setAttribute("aria-current","page");
     else t.removeAttribute("aria-current");
   });
-  if(!logged) return;
+  if(!logged){
+    if(active === "login") renderSubjectPicker("login-subjects", loginSubjects, "lsubj");
+    return;
+  }
   if(active === "feed"){ renderChips(); renderFeed(); }
   if(active === "create"){
     $("c-title").textContent = editingId ? "Редактировать запрос" : "Новый запрос";
@@ -777,6 +887,8 @@ document.addEventListener("click", e => {
   const {action, id, tab, subject, n, tag} = b.dataset;
   if(action === "tab") setView(tab);
   else if(action === "chip"){ filterSubject = subject; renderChips(); renderFeed(); }
+  else if(action === "lsubj") toggleLoginSubject(subject);
+  else if(action === "psubj") toggleProfileSubject(subject);
   else if(action === "take") takeOn(id);
   else if(action === "release") release(id);
   else if(action === "resolve") openReview(id);
@@ -792,6 +904,7 @@ document.addEventListener("click", e => {
   else if(action === "photo") showPhoto(id);
   else if(action === "delproof") delProof(id);
 });
+$("save-subjects-btn").addEventListener("click", saveProfileSubjects);
 $("rules-ok").addEventListener("change", e => { $("rules-btn").disabled = !e.target.checked; });
 $("rules-btn").addEventListener("click", acceptRules);
 $("login-form").addEventListener("submit", handleLogin);
