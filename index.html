@@ -116,6 +116,13 @@ nav .in{display:flex;width:100%;max-width:560px}
 .board li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--line);font-size:15px}
 .board li:first-child{border-top:0}
 .card h3+.board{margin-top:6px}
+.stars{display:flex;gap:6px;justify-content:center;margin:4px 0 14px}
+.star{width:48px;height:48px;border:1px solid var(--line);border-radius:12px;background:var(--card);font-size:26px;line-height:1;color:var(--line);cursor:pointer;transition:all .15s}
+.star.on{color:#f5a524;border-color:#f5a524;background:var(--warn-bg)}
+.stars-ro{color:#f5a524;letter-spacing:2px}
+.safe{font-size:13px;background:var(--info-bg);border-radius:10px;padding:10px;margin:0 0 10px}
+.modal .box{max-height:92vh;overflow:auto}
+.thumb{width:100%;max-height:180px;object-fit:cover;border-radius:12px;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -218,6 +225,10 @@ nav .in{display:flex;width:100%;max-width:560px}
       <div class="stat"><b id="s-points">0</b><small>Баллы ⭐</small></div>
     </div>
     <div class="card">
+      <h3>⭐ Мой рейтинг</h3>
+      <div id="my-rating"></div>
+    </div>
+    <div class="card">
       <h3>🏆 Топ недели</h3>
       <ul class="board" id="board"></ul>
     </div>
@@ -237,6 +248,9 @@ nav .in{display:flex;width:100%;max-width:560px}
     <h2>🛡️ Панель модератора</h2>
     <p class="sub">Запросы на проверке скрыты из ленты.</p>
     <div id="mod-list"></div>
+    <h2 style="margin-top:24px">Последние отзывы</h2>
+    <p class="sub">Следите за повторяющимися парами и слишком быстрыми закрытиями.</p>
+    <div id="mod-reviews"></div>
   </section>
 
   <!-- STATISTICS -->
@@ -256,18 +270,39 @@ nav .in{display:flex;width:100%;max-width:560px}
     <button class="tab" data-action="tab" data-tab="profile" aria-label="Open profile"><span class="i" aria-hidden="true">👤</span>Профиль</button>
   </div>
 </nav>
-<div id="thanks-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="thanks-title" hidden>
+<div id="review-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="rv-title" hidden>
   <div class="box">
-    <h3 id="thanks-title">Вопрос решён? 🎉</h3>
-    <p class="sub">Помощник <b id="thanks-helper"></b> получит <b>+10 баллов</b> в рейтинг недели.</p>
+    <h3 id="rv-title">Как прошла помощь? 🎉</h3>
+    <p class="sub" style="margin-bottom:10px">Помощник: <b id="rv-helper"></b></p>
+    <div class="stars" id="rv-stars" role="radiogroup" aria-label="Rating from 1 to 5 stars"></div>
+    <div id="rv-tags-wrap" hidden>
+      <label>Выберите до 3 вариантов</label>
+      <div class="tags" id="rv-tags" style="margin-bottom:12px"></div>
+    </div>
     <div class="field">
-      <label for="thanks-text">Короткое спасибо (необязательно)</label>
-      <input id="thanks-text" maxlength="100" placeholder="Спасибо, всё понятно!">
+      <label for="rv-text">Отзыв (необязательно)</label>
+      <textarea id="rv-text" maxlength="200" style="min-height:70px" placeholder="Пара слов о помощи"></textarea>
+      <div class="hint" id="rv-count">0/200</div>
+    </div>
+    <div class="field">
+      <label for="rv-file">Фото учебного материала (необязательно)</label>
+      <p class="safe">🔒 Только учебное: тетрадь, код, условие задачи. Без лиц, имён, телефонов и другой личной информации. Фото видят только вы, помощник и модератор.</p>
+      <input id="rv-file" type="file" accept="image/*">
+      <div id="rv-photo-box" hidden style="margin-top:8px">
+        <img id="rv-preview" class="thumb" alt="Preview of the attached photo">
+        <button class="btn ghost" type="button" data-action="rmpreview" aria-label="Remove the attached photo">Убрать фото</button>
+      </div>
     </div>
     <div class="btn-pair">
-      <button class="btn ghost" id="thanks-cancel" type="button">Отмена</button>
-      <button class="btn ok" id="thanks-ok" type="button">Закрыть +10 ⭐</button>
+      <button class="btn ghost" id="rv-cancel" type="button">Отмена</button>
+      <button class="btn ok" id="rv-submit" type="button" disabled>Отправить и закрыть</button>
     </div>
+  </div>
+</div>
+<div id="photo-modal" class="modal" role="dialog" aria-modal="true" aria-label="Attached study photo" hidden>
+  <div class="box">
+    <img id="photo-img" alt="Study material attached to the review" style="width:100%;border-radius:12px">
+    <button class="btn ghost" id="photo-close" type="button" style="margin-top:12px">Закрыть</button>
   </div>
 </div>
 <div id="toast" role="status" aria-live="polite"></div>
@@ -313,6 +348,11 @@ let rulesOk = lsGet(RULES_KEY) === "1";
 let currentUser = null, requests = [], view = "feed";
 let filterSubject = "", editingId = null, resolvingId = null, lastSweep = 0;
 let myPoints = 0, board = [], stats = null;
+let reviews = new Map(), ratings = new Map(), myReviews = null, modReviews = [];
+const TAGS_GOOD = ["Объяснил понятно","Помог разобраться","Быстро ответил","Был вежлив","Терпеливо объяснял"];
+const TAGS_LOW = ["Объяснение было непонятным","Долго отвечал","Не помог по теме"];
+let rv = {rating:0, tags:[], image:null, busy:false};
+const stars = n => "★".repeat(n) + "☆".repeat(5 - n);
 
 function toast(msg){
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
@@ -339,7 +379,7 @@ function fromRow(r, contacts, mine){
     topic:r.topic, desc:r.description, status:r.status, helperId:r.helper_id, helper:r.helper,
     reportsCount:r.reports_count, reportedBy: mine.has(r.id) ? [currentUser.id] : [],
     telegram: contacts.get(r.id) || null, createdAt: Date.parse(r.created_at),
-    claimedAt: r.claimed_at ? Date.parse(r.claimed_at) : null, thanks: r.thanks || null};
+    claimedAt: r.claimed_at ? Date.parse(r.claimed_at) : null, thanks: r.thanks || null, points: r.points || 0, hasProof: !!r.has_proof};
 }
 async function refresh(){
   if(!db || !currentUser) return;
@@ -348,19 +388,24 @@ async function refresh(){
       lastSweep = Date.now();
       await db.rpc("sweep_stale");
     }
-    const [a, b, c] = await Promise.all([
+    const [a, b, c, d, e2] = await Promise.all([
       db.from("requests").select("*").order("created_at",{ascending:false}).limit(200),
       db.from("request_contacts").select("*"),
-      db.from("reports").select("request_id")
+      db.from("reports").select("request_id"),
+      db.from("request_reviews").select("*"),
+      db.rpc("helper_ratings")
     ]);
-    const err = a.error || b.error || c.error;
+    const err = a.error || b.error || c.error || d.error;
     if(err){ toast(friendly(err)); return; }
     const contacts = new Map(b.data.map(x => [x.request_id, x.telegram]));
     const mine = new Set(c.data.map(x => x.request_id));
+    reviews = new Map(d.data.map(x => [x.request_id, {rating:x.rating, tags:x.tags || [], body:x.review_text}]));
+    ratings = new Map((e2.data || []).map(x => [x.helper_id, {avg:x.avg_rating, cnt:x.cnt}]));
     requests = a.data.map(r => fromRow(r, contacts, mine));
     render();
     if(view === "profile") loadProfileExtras();
     if(view === "stats") loadStats();
+    if(view === "mod") loadModReviews();
   }catch(e){ toast(friendly(e)); }
 }
 async function call(name, args, okMsg){
@@ -374,11 +419,19 @@ async function call(name, args, okMsg){
 }
 async function loadProfileExtras(){
   try{
-    const [p, l] = await Promise.all([db.rpc("my_points"), db.rpc("weekly_leaderboard")]);
+    const [p, l, m] = await Promise.all([db.rpc("my_points"), db.rpc("weekly_leaderboard"), db.rpc("my_reviews")]);
     if(!p.error) myPoints = p.data || 0;
     if(!l.error) board = l.data || [];
+    if(!m.error) myReviews = m.data;
     renderProfile();
   }catch(e){}
+}
+async function loadModReviews(){
+  try{
+    const {data, error} = await db.rpc("mod_reviews");
+    if(error){ toast(friendly(error)); return; }
+    modReviews = data || []; renderModReviews();
+  }catch(e){ toast(friendly(e)); }
 }
 async function loadStats(){
   try{
@@ -464,19 +517,104 @@ async function removeReq(id){
   if(!confirm("Удалить запрос навсегда?")) return;
   await call("mod_delete", {p_id:Number(id)}, "Запрос удалён");
 }
-function openThanks(id){
-  resolvingId = Number(id);
-  $("thanks-helper").textContent = (find(id) || {}).helper || "помощник";
-  $("thanks-text").value = "";
-  $("thanks-modal").hidden = false;
-  $("thanks-text").focus();
+/* ---------- Отзыв при закрытии запроса ---------- */
+function renderReviewForm(){
+  $("rv-stars").innerHTML = [1,2,3,4,5].map(n =>
+    `<button type="button" class="star ${n <= rv.rating ? "on" : ""}" data-action="star" data-n="${n}" role="radio" aria-checked="${n === rv.rating}" aria-label="Rate ${n} star${n > 1 ? "s" : ""}">★</button>`).join("");
+  const list = !rv.rating ? [] : rv.rating >= 4 ? TAGS_GOOD : TAGS_LOW;
+  $("rv-tags").innerHTML = list.map(t =>
+    `<button type="button" class="chip ${rv.tags.includes(t) ? "on" : ""}" data-action="rtag" data-tag="${esc(t)}" aria-pressed="${rv.tags.includes(t)}">${esc(t)}</button>`).join("");
+  $("rv-tags-wrap").hidden = !list.length;
+  $("rv-submit").disabled = !rv.rating || rv.busy;
 }
-function closeThanks(){ resolvingId = null; $("thanks-modal").hidden = true; }
-async function confirmResolve(){
-  const id = resolvingId; if(!id) return;
-  const text = $("thanks-text").value.trim();
-  closeThanks();
-  await call("resolve_request", {p_id:id, p_thanks:text}, "Запрос закрыт. Помощник получил +"+POINTS+" баллов!");
+function openReview(id){
+  resolvingId = Number(id);
+  rv = {rating:0, tags:[], image:null, busy:false};
+  $("rv-helper").textContent = (find(id) || {}).helper || "помощник";
+  $("rv-text").value = ""; $("rv-count").textContent = "0/200";
+  $("rv-file").value = ""; $("rv-photo-box").hidden = true;
+  renderReviewForm();
+  $("review-modal").hidden = false;
+  const first = $("rv-stars").querySelector(".star"); if(first) first.focus();
+}
+function closeReview(){ resolvingId = null; $("review-modal").hidden = true; }
+function pickStar(n){
+  rv.rating = Number(n);
+  const list = rv.rating >= 4 ? TAGS_GOOD : TAGS_LOW;
+  rv.tags = rv.tags.filter(t => list.includes(t));
+  renderReviewForm();
+}
+function pickTag(tag){
+  if(rv.tags.includes(tag)) rv.tags = rv.tags.filter(t => t !== tag);
+  else if(rv.tags.length < 3) rv.tags.push(tag);
+  else toast("Можно выбрать не больше 3");
+  renderReviewForm();
+}
+// Фото: проверка типа, уменьшение и пересохранение как JPEG (так же удаляются скрытые данные, например геолокация)
+function compressImage(file){
+  return new Promise((resolve, reject) => {
+    if(!file.type.startsWith("image/") || file.type === "image/svg+xml") return reject(new Error("Подходит только фото (JPG, PNG, WebP)"));
+    if(file.size > 10*1024*1024) return reject(new Error("Фото слишком большое (больше 10 МБ)"));
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let max = 1000, q = 0.7;
+      for(let i = 0; i < 6; i++){
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+        const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+        const out = c.toDataURL("image/jpeg", q);
+        if(out.length <= 150000) return resolve(out);
+        max = Math.round(max * 0.8); q = Math.max(0.4, q - 0.08);
+      }
+      reject(new Error("Не удалось уменьшить фото. Выберите другое"));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Не удалось открыть фото")); };
+    img.src = url;
+  });
+}
+function clearPreview(){ rv.image = null; $("rv-file").value = ""; $("rv-photo-box").hidden = true; }
+async function onPhotoPicked(e){
+  const f = e.target.files[0]; if(!f) return;
+  try{
+    rv.image = await compressImage(f);
+    $("rv-preview").src = rv.image; $("rv-photo-box").hidden = false;
+  }catch(err){ clearPreview(); toast(err.message); }
+}
+async function confirmReview(){
+  const id = resolvingId;
+  if(!id || !rv.rating || rv.busy) return;
+  rv.busy = true; renderReviewForm();
+  const pts = await call("resolve_request", {p_id:id, p_rating:rv.rating, p_tags:rv.tags, p_text:$("rv-text").value.trim(), p_image:rv.image});
+  rv.busy = false;
+  if(pts === null){ renderReviewForm(); return; }   // окно остаётся открытым, сообщение об ошибке уже показано
+  closeReview();
+  toast(Number(pts) > 0 ? "Запрос закрыт. Помощник получил +"+pts+" баллов!" : "Спасибо за отзыв! Запрос закрыт.");
+}
+async function showPhoto(id){
+  try{
+    const {data, error} = await db.from("request_proofs").select("image").eq("request_id", Number(id)).maybeSingle();
+    if(error){ toast(friendly(error)); return; }
+    if(!data || !String(data.image).startsWith("data:image/jpeg;base64,")){ toast("Фото недоступно"); return; }
+    $("photo-img").src = data.image; $("photo-modal").hidden = false;
+  }catch(e){ toast(friendly(e)); }
+}
+async function delProof(id){
+  if(!confirm("Удалить фото у этого отзыва?")) return;
+  await call("mod_remove_proof", {p_id:Number(id)}, "Фото удалено");
+}
+function reviewHtml(r){
+  const v = reviews.get(r.id);
+  let h = `<p class="note">✨ Закрыто${r.helper ? ". Помог(ла): <b>"+esc(r.helper)+"</b>" : ""}${r.points ? " (+"+esc(r.points)+" ⭐)" : ""}</p>`;
+  if(v){
+    h += `<div class="note"><span class="stars-ro" aria-label="Rating ${esc(v.rating)} out of 5">${esc(stars(v.rating))}</span>`;
+    if(v.tags.length) h += `<div class="tags" style="margin-top:6px">${v.tags.map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+    if(v.body) h += `<div style="margin-top:6px">💬 «${esc(v.body)}»</div>`;
+    h += "</div>";
+  } else if(r.thanks) h += `<p class="note">💬 «${esc(r.thanks)}»</p>`;
+  if(r.hasProof) h += `<button class="btn ghost" data-action="photo" data-id="${r.id}" aria-label="Show attached study photo">📷 Показать фото</button>`;
+  return h;
 }
 
 /* ---------- Отрисовка ---------- */
@@ -493,7 +631,8 @@ function actionsHtml(r){
       : `<button class="btn" data-action="take" data-id="${r.id}">🤝 Беру в работу</button>`;
   }
   if(r.status === "in_progress"){
-    h += `<p class="note">🙌 Помогает: <b>${esc(r.helper)}</b></p>`;
+    const hr = ratings.get(r.helperId);
+    h += `<p class="note">🙌 Помогает: <b>${esc(r.helper)}</b>${hr ? " · ⭐ "+esc(hr.avg)+" ("+esc(hr.cnt)+")" : ""}</p>`;
     if(r.claimedAt && (mine || isHelper)) h += `<p class="hint">⏱ Вернётся в ленту через ${esc(hoursLeft(r))} ч, если запрос не закрыть.</p>`;
     if(isHelper && r.telegram){
       h += `<a class="btn tg" href="https://t.me/${encodeURIComponent(r.telegram)}" target="_blank" rel="noopener noreferrer" aria-label="Open Telegram chat with ${esc(r.author)}">💬 Написать в Telegram (@${esc(r.telegram)})</a>`;
@@ -504,10 +643,7 @@ function actionsHtml(r){
     if(mine) h += `<button class="btn ok" data-action="resolve" data-id="${r.id}">✅ Решено</button>`;
   }
   if(r.status === "under_review") h += '<p class="note">🚩 Запрос на проверке у модератора.</p>';
-  if(r.status === "resolved"){
-    h += `<p class="note">✨ Закрыто${r.helper ? ". Помог(ла): <b>"+esc(r.helper)+"</b> (+"+POINTS+" ⭐)" : ""}</p>`;
-    if(r.thanks) h += `<p class="note">💬 «${esc(r.thanks)}»</p>`;
-  }
+  if(r.status === "resolved") h += reviewHtml(r);
   return h;
 }
 function cardHtml(r){
@@ -540,6 +676,15 @@ function modCardHtml(r){
     </div>
   </article>`;
 }
+function renderModReviews(){
+  $("mod-reviews").innerHTML = modReviews.length ? modReviews.map(x => `<article class="card">
+    <div class="tags"><span class="tag stars-ro">${esc(stars(x.rating))}</span><span class="tag ${x.points ? "open" : "resolved"}">${x.points ? "+"+esc(x.points)+" ⭐" : "без баллов"}</span></div>
+    <h3 style="margin-top:8px">${esc(x.topic)}</h3>
+    <p class="desc">${esc(x.author)} → ${esc(x.helper)}${x.tags && x.tags.length ? " · "+x.tags.map(t => esc(t)).join(", ") : ""}</p>
+    ${x.body ? `<p class="note">💬 «${esc(x.body)}»</p>` : ""}
+    ${x.has_proof ? `<div class="btn-pair"><button class="btn ghost" data-action="photo" data-id="${esc(x.id)}" aria-label="Show attached study photo">📷 Фото</button><button class="btn bad" data-action="delproof" data-id="${esc(x.id)}" aria-label="Delete the attached photo">Удалить фото</button></div>` : ""}
+  </article>`).join("") : emptyHtml("Пока нет отзывов.");
+}
 const emptyHtml = text => `<div class="empty">${esc(text)}</div>`;
 
 function renderChips(){
@@ -564,6 +709,13 @@ function renderProfile(){
   $("board").innerHTML = board.length
     ? board.map((x,i) => `<li><span>${i+1}. ${esc(x.name)}, ${esc(x.grade)}</span><b>${esc(x.points)} ⭐</b></li>`).join("")
     : "<li>На этой неделе пока никто не помог. Станьте первым!</li>";
+  const m = myReviews;
+  $("my-rating").innerHTML = !m || !m.cnt
+    ? '<p class="hint">Пока нет оценок. Помогайте другим, и здесь появятся отзывы.</p>'
+    : `<p style="margin:0 0 8px"><b style="font-size:24px">${esc(m.avg)}</b> <span class="stars-ro">${esc(stars(Math.round(m.avg)))}</span> <span class="hint">(${esc(m.cnt)} оценок)</span></p>` +
+      (m.recent || []).map(x => `<div class="note"><span class="stars-ro">${esc(stars(x.rating))}</span>` +
+        (x.tags && x.tags.length ? ` <span class="hint">${x.tags.map(t => esc(t)).join(", ")}</span>` : "") +
+        (x.body ? `<div>💬 «${esc(x.body)}»</div>` : "") + "</div>").join("");
   $("mod-card").hidden = !currentUser.isMod;
   $("mod-btn").textContent = "Запросы на проверке ("+requests.filter(r => r.status === "under_review").length+")";
 }
@@ -613,6 +765,7 @@ function render(){
   if(active === "mod"){
     const list = requests.filter(r => r.status === "under_review");
     $("mod-list").innerHTML = list.length ? list.map(modCardHtml).join("") : emptyHtml("Нет запросов на проверке.");
+    renderModReviews();
   }
   if(active === "stats") renderStats();
 }
@@ -621,27 +774,39 @@ function render(){
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-action]");
   if(!b) return;
-  const {action, id, tab, subject} = b.dataset;
+  const {action, id, tab, subject, n, tag} = b.dataset;
   if(action === "tab") setView(tab);
   else if(action === "chip"){ filterSubject = subject; renderChips(); renderFeed(); }
   else if(action === "take") takeOn(id);
   else if(action === "release") release(id);
-  else if(action === "resolve") openThanks(id);
+  else if(action === "resolve") openReview(id);
   else if(action === "edit") startEdit(id);
   else if(action === "cancel") cancelReq(id);
   else if(action === "report") report(id);
   else if(action === "approve") approve(id);
   else if(action === "remove") removeReq(id);
   else if(action === "logout") logout();
+  else if(action === "star") pickStar(n);
+  else if(action === "rtag") pickTag(tag);
+  else if(action === "rmpreview") clearPreview();
+  else if(action === "photo") showPhoto(id);
+  else if(action === "delproof") delProof(id);
 });
 $("rules-ok").addEventListener("change", e => { $("rules-btn").disabled = !e.target.checked; });
 $("rules-btn").addEventListener("click", acceptRules);
 $("login-form").addEventListener("submit", handleLogin);
 $("create-form").addEventListener("submit", handleCreate);
 $("f-search").addEventListener("input", renderFeed);
-$("thanks-ok").addEventListener("click", confirmResolve);
-$("thanks-cancel").addEventListener("click", closeThanks);
-document.addEventListener("keydown", e => { if(e.key === "Escape" && !$("thanks-modal").hidden) closeThanks(); });
+$("rv-submit").addEventListener("click", confirmReview);
+$("rv-cancel").addEventListener("click", closeReview);
+$("rv-file").addEventListener("change", onPhotoPicked);
+$("rv-text").addEventListener("input", e => { $("rv-count").textContent = e.target.value.length + "/200"; });
+$("photo-close").addEventListener("click", () => { $("photo-modal").hidden = true; $("photo-img").removeAttribute("src"); });
+document.addEventListener("keydown", e => {
+  if(e.key !== "Escape") return;
+  if(!$("photo-modal").hidden) $("photo-close").click();
+  else if(!$("review-modal").hidden) closeReview();
+});
 setInterval(updateCooldown, 1000);
 setInterval(() => { if(!document.hidden && currentUser && view !== "create") refresh(); }, 20000);
 document.addEventListener("visibilitychange", () => { if(!document.hidden) refresh(); });
