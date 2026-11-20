@@ -35,7 +35,7 @@ jobs:
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
 
-      - name: Create signing keystore
+      - name: Create signing keystore and TWA config
         run: |
           mkdir -p twa-build
           keytool -genkeypair -v \
@@ -48,31 +48,52 @@ jobs:
             -keypass birge123456 \
             -dname "CN=Birge, OU=School, O=Birge, L=Astana, S=Astana, C=KZ"
 
-      - name: Init TWA project from GitHub Pages manifest
+          cat << 'EOF' > twa-build/twa-manifest.json
+          {
+            "packageId": "kz.school.birge",
+            "host": "islamkazna1234-cloud.github.io",
+            "name": "Birge — школьная взаимопомощь",
+            "launcherName": "Birge",
+            "display": "standalone",
+            "themeColor": "#2b4acb",
+            "themeColorDark": "#0f1424",
+            "navigationColor": "#ffffff",
+            "navigationColorDark": "#182036",
+            "navigationDividerColor": "#e2e5ee",
+            "navigationDividerColorDark": "#2b3552",
+            "backgroundColor": "#f5f6fa",
+            "enableNotifications": false,
+            "startUrl": "/school-helper/",
+            "iconUrl": "https://islamkazna1234-cloud.github.io/school-helper/icons/icon-512.png",
+            "maskableIconUrl": "https://islamkazna1234-cloud.github.io/school-helper/icons/icon-maskable-512.png",
+            "splashScreenFadeOutDuration": 300,
+            "signingKey": {
+              "path": "./birge-release.keystore",
+              "alias": "birge"
+            },
+            "appVersionName": "1.0.0",
+            "appVersionCode": 1,
+            "shortcuts": [],
+            "generatorApp": "bubblewrap-cli",
+            "webManifestUrl": "https://islamkazna1234-cloud.github.io/school-helper/manifest.json",
+            "fallbackType": "customtabs",
+            "features": {},
+            "alphaDependencies": {
+              "enabled": false
+            },
+            "enableSiteSettingsShortcut": true,
+            "isChromeOSOnly": false,
+            "isMetaQuest": false,
+            "fullScopeUrl": "https://islamkazna1234-cloud.github.io/school-helper/",
+            "minSdkVersion": 21,
+            "orientation": "portrait"
+          }
+          EOF
+
+      - name: Generate Android project & Build APK
         run: |
           cd twa-build
-          yes | bubblewrap init \
-            --manifest="https://islamkazna1234-cloud.github.io/school-helper/manifest.json" \
-            --jdkPath="$JAVA_HOME" \
-            --androidSdkPath="$ANDROID_HOME"
-
-      - name: Configure twa-manifest.json with keystore
-        run: |
-          node -e '
-            const fs = require("fs");
-            const p = "twa-build/twa-manifest.json";
-            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
-            cfg.signingKey = {
-              path: "./birge-release.keystore",
-              alias: "birge"
-            };
-            cfg.enableNotifications = false;
-            fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
-          '
-
-      - name: Build Android APK
-        run: |
-          cd twa-build
+          bubblewrap update --skipVersionUpgrade
           printf "birge123456\nbirge123456\n" | bubblewrap build
 
       - name: Upload APK artifact
