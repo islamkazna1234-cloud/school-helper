@@ -46,25 +46,24 @@ jobs:
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
 
-      - name: Write Bubblewrap config, keystore and twa-manifest
+      - name: Decode permanent keystore and write TWA config
+        env:
+          KEYSTORE_B64: ${{ secrets.BIRGE_KEYSTORE_BASE64 }}
         run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "ERROR: Secret BIRGE_KEYSTORE_BASE64 is missing!"
+            exit 1
+          fi
+
           mkdir -p ~/.bubblewrap twa-build
+          echo "$KEYSTORE_B64" | base64 -d > twa-build/birge-release.keystore
+
           cat << EOF > ~/.bubblewrap/config.json
           {
             "jdkPath": "$JAVA_HOME",
             "androidSdkPath": "$ANDROID_HOME"
           }
           EOF
-
-          keytool -genkeypair -v \
-            -keystore twa-build/birge-release.keystore \
-            -alias birge \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass birge123456 \
-            -keypass birge123456 \
-            -dname "CN=Birge, OU=School, O=Birge, L=Astana, S=Astana, C=KZ"
 
           cat << 'EOF' > twa-build/twa-manifest.json
           {
@@ -119,8 +118,45 @@ jobs:
             -Pandroid.injected.signing.key.alias=birge \
             -Pandroid.injected.signing.key.password=birge123456
 
+      - name: Extract SHA-256 from APK and generate assetlinks.json
+        run: |
+          APK_PATH=$(ls twa-build/app/build/outputs/apk/release/app-release*.apk | head -n 1)
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          SHA256_RAW=$("$APKSIGNER" verify --print-certs "$APK_PATH" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print toupper($2); exit}')
+          SHA256=$(echo "$SHA256_RAW" | sed 's/\(..\)/\1:/g; s/:$//')
+
+          if [ -z "$SHA256" ]; then
+            echo "ERROR: Could not extract SHA-256 from APK"
+            exit 1
+          fi
+
+          mkdir -p assetlinks-site/.well-known
+          touch assetlinks-site/.nojekyll
+          cat << EOF > assetlinks-site/.well-known/assetlinks.json
+          [
+            {
+              "relation": ["delegate_permission/common.handle_all_urls"],
+              "target": {
+                "namespace": "android_app",
+                "package_name": "kz.school.birge",
+                "sha256_cert_fingerprints": [
+                  "$SHA256"
+                ]
+              }
+            }
+          ]
+          EOF
+          cat assetlinks-site/.well-known/assetlinks.json
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Birge-Android-APK
           path: twa-build/app/build/outputs/apk/release/app-release*.apk
+
+      - name: Upload assetlinks site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Birge-assetlinks
+          path: assetlinks-site/
+          include-hidden-files: true
