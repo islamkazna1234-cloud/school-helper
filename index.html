@@ -124,6 +124,17 @@ nav .in{display:flex;width:100%;max-width:560px}
 .safe{font-size:13px;background:var(--info-bg);border-radius:10px;padding:10px;margin:0 0 10px}
 .modal .box{max-height:92vh;overflow:auto}
 .thumb{width:100%;max-height:180px;object-fit:cover;border-radius:12px;margin-bottom:8px}
+
+.role-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.role-tab{min-height:42px;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);
+  color:var(--muted);font:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:all .15s}
+.role-tab.on{background:var(--info-bg);border-color:var(--brand);color:var(--brand)}
+.role-badge{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px}
+.role-badge.asked{background:var(--info-bg);color:var(--brand)}
+.role-badge.helped{background:var(--ok-bg);color:var(--ok)}
+.pts-pill{display:inline-block;font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;margin-bottom:6px}
+.pts-pill.win{background:var(--ok-bg);color:var(--ok)}
+.pts-pill.zero{background:var(--line);color:var(--muted)}
 </style>
 </head>
 <body>
@@ -217,7 +228,11 @@ nav .in{display:flex;width:100%;max-width:560px}
   <!-- MINE -->
   <section id="v-mine" class="view" hidden>
     <h2>Мои запросы</h2>
-    <p class="sub">Ваши вопросы и запросы, в которых вы помогаете.</p>
+    <p class="sub">Разделено на ваши вопросы и заявки, где вы помогали.</p>
+    <div class="role-tabs" role="tablist" aria-label="Filter my requests by role">
+      <button type="button" class="role-tab on" id="rtab-asked" data-action="mtab" data-mtab="asked" aria-selected="true">🙋 Мои вопросы (0)</button>
+      <button type="button" class="role-tab" id="rtab-helped" data-action="mtab" data-mtab="helped" aria-selected="false">🤝 Я помогал (0)</button>
+    </div>
     <div id="mine"></div>
   </section>
 
@@ -360,7 +375,7 @@ const configured = !/YOUR-/.test(SUPABASE_URL + SUPABASE_KEY);
 const db = (configured && window.supabase) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 let rulesOk = lsGet(RULES_KEY) === "1";
 let currentUser = null, requests = [], view = "feed";
-let filterSubject = "", editingId = null, resolvingId = null, lastSweep = 0;
+let filterSubject = "", mineTab = "asked", editingId = null, resolvingId = null, lastSweep = 0;
 let myPoints = 0, board = [], stats = null;
 let reviews = new Map(), ratings = new Map(), myReviews = null, modReviews = [];
 let loginSubjects = [], profileSubjects = [];
@@ -426,7 +441,9 @@ function fromRow(r, contacts, mine){
     topic:r.topic, desc:r.description, status:r.status, helperId:r.helper_id, helper:r.helper,
     reportsCount:r.reports_count, reportedBy: mine.has(r.id) ? [currentUser.id] : [],
     telegram: contacts.get(r.id) || null, createdAt: Date.parse(r.created_at),
-    claimedAt: r.claimed_at ? Date.parse(r.claimed_at) : null, thanks: r.thanks || null, points: r.points || 0, hasProof: !!r.has_proof};
+    claimedAt: r.claimed_at ? Date.parse(r.claimed_at) : null,
+    closedAt: r.closed_at ? Date.parse(r.closed_at) : null,
+    thanks: r.thanks || null, points: r.points || 0, hasProof: !!r.has_proof};
 }
 async function refresh(){
   if(!db || !currentUser) return;
@@ -609,6 +626,7 @@ async function removeReq(id){
   if(!confirm("Удалить запрос навсегда?")) return;
   await call("mod_delete", {p_id:Number(id)}, "Запрос удалён");
 }
+
 /* ---------- Отзыв при закрытии запроса ---------- */
 function renderReviewForm(){
   $("rv-stars").innerHTML = [1,2,3,4,5].map(n =>
@@ -709,6 +727,34 @@ function reviewHtml(r){
 }
 
 /* ---------- Отрисовка ---------- */
+function roleBadgeHtml(r){
+  if(!currentUser) return "";
+  if(r.authorId === currentUser.id) return '<span class="role-badge asked">🙋 Мой вопрос</span>';
+  if(r.helperId === currentUser.id) return '<span class="role-badge helped">🤝 Я помогал</span>';
+  return "";
+}
+function counterpartyLine(r){
+  if(!currentUser) return `👤 ${esc(r.author)}`;
+  if(r.authorId === currentUser.id){
+    return r.helper ? `👤 Вы · Помощник: <b>${esc(r.helper)}</b>` : "👤 Вы · Ждёт помощника";
+  }
+  if(r.helperId === currentUser.id){
+    return `👤 Автор: <b>${esc(r.author)}</b>`;
+  }
+  return `👤 ${esc(r.author)}`;
+}
+function helperPointsHint(r){
+  if(!currentUser || r.helperId !== currentUser.id || r.status !== "resolved") return "";
+  if(r.points > 0){
+    return `<span class="pts-pill win">+${esc(r.points)} ⭐ начислено</span>`;
+  }
+  const v = reviews.get(r.id);
+  let reason = "0 ⭐";
+  if(v && v.rating <= 3) reason = `0 ⭐ · оценка ${esc(v.rating)} ★`;
+  else if(r.claimedAt && r.closedAt && (r.closedAt - r.claimedAt) < 180000) reason = "0 ⭐ · закрыто меньше чем за 3 мин";
+  else reason = "0 ⭐ · не начислено (лимит пары или условия)";
+  return `<span class="pts-pill zero">${reason}</span>`;
+}
 function actionsHtml(r){
   const mine = r.authorId === currentUser.id, isHelper = r.helperId === currentUser.id;
   let h = "";
@@ -744,6 +790,7 @@ function cardHtml(r){
   return `<article class="card ${r.urgency === "urgent" && r.status !== "resolved" ? "urgent" : ""}">
     <div class="card-top">
       <div class="tags">
+        ${roleBadgeHtml(r)}
         <span class="tag">${esc(r.subject)}</span>
         ${r.urgency === "urgent" ? '<span class="tag urg">🔥 Срочно</span>' : ""}
         <span class="tag ${esc(r.status)}">${esc(STATUS_LABEL[r.status])}</span>
@@ -751,8 +798,8 @@ function cardHtml(r){
     </div>
     <h3>${esc(r.topic)}</h3>
     <p class="desc">${esc(r.desc)}</p>
-    <div class="meta"><span>👤 ${esc(r.author)}</span><span>${esc(ago(r.createdAt))}</span></div>
-    <div class="stack">${actionsHtml(r)}</div>
+    <div class="meta"><span>${counterpartyLine(r)}</span><span>${esc(ago(r.createdAt))}</span></div>
+    <div class="stack">${helperPointsHint(r)}${actionsHtml(r)}</div>
   </article>`;
 }
 function modCardHtml(r){
@@ -868,8 +915,20 @@ function render(){
     updateCooldown();
   }
   if(active === "mine"){
-    const list = requests.filter(r => r.authorId === currentUser.id || r.helperId === currentUser.id);
-    $("mine").innerHTML = list.length ? list.map(cardHtml).join("") : emptyHtml("У вас пока нет запросов. Нажмите «Запрос», чтобы попросить помощи.");
+    const askedList = requests.filter(r => r.authorId === currentUser.id);
+    const helpedList = requests.filter(r => r.helperId === currentUser.id);
+    $("rtab-asked").textContent = `🙋 Мои вопросы (${askedList.length})`;
+    $("rtab-helped").textContent = `🤝 Я помогал (${helpedList.length})`;
+    $("rtab-asked").classList.toggle("on", mineTab === "asked");
+    $("rtab-helped").classList.toggle("on", mineTab === "helped");
+    $("rtab-asked").setAttribute("aria-selected", String(mineTab === "asked"));
+    $("rtab-helped").setAttribute("aria-selected", String(mineTab === "helped"));
+    const list = mineTab === "asked" ? askedList : helpedList;
+    $("mine").innerHTML = list.length
+      ? list.map(cardHtml).join("")
+      : emptyHtml(mineTab === "asked"
+          ? "У вас пока нет вопросов. Нажмите «Запрос», чтобы попросить помощи."
+          : "Вы ещё не брали запросы в работу. Загляните в «Ленту»!");
   }
   if(active === "profile") renderProfile();
   if(active === "mod"){
@@ -886,6 +945,7 @@ document.addEventListener("click", e => {
   if(!b) return;
   const {action, id, tab, subject, n, tag} = b.dataset;
   if(action === "tab") setView(tab);
+  else if(action === "mtab"){ mineTab = b.dataset.mtab === "helped" ? "helped" : "asked"; render(); }
   else if(action === "chip"){ filterSubject = subject; renderChips(); renderFeed(); }
   else if(action === "lsubj") toggleLoginSubject(subject);
   else if(action === "psubj") toggleProfileSubject(subject);
