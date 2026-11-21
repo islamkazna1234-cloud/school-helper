@@ -74,6 +74,22 @@ jobs:
           fi
           npx cap sync android
 
+      - name: Fix Kotlin stdlib duplicate classes in Gradle
+        run: |
+          cat << 'EOF' >> android/app/build.gradle
+
+          dependencies {
+              constraints {
+                  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") {
+                      because("kotlin-stdlib-jdk7 is now a part of kotlin-stdlib")
+                  }
+                  implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") {
+                      because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib")
+                  }
+              }
+          }
+          EOF
+
       - name: Decode permanent keystore and build signed APK
         env:
           KEYSTORE_B64: ${{ secrets.BIRGE_KEYSTORE_BASE64 }}
